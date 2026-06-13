@@ -1,15 +1,40 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import MapView from "@/components/MapView";
+import jalaali from "jalaali-js";
 
-// Dynamic import for Leaflet — only on client
-let L: typeof import("leaflet") | null = null;
-async function getLeaflet() {
-  if (!L) {
-    L = await import("leaflet");
-    await import("leaflet/dist/leaflet.css").catch(() => {});
-  }
-  return L;
+/* ------------------------------------------------------------------ */
+/*  Jalali helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+const JALALI_MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"];
+const JALALI_WEEKDAYS = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"];
+
+function gregorianToJalali(y: number, m: number, d: number) {
+  return jalaali.toJalaali(y, m, d);
+}
+
+function jalaliToGregorian(jy: number, jm: number, jd: number) {
+  return jalaali.toGregorian(jy, jm, jd);
+}
+
+function formatJalaliDate(jy: number, jm: number, jd: number) {
+  return `${jy}/${String(jm).padStart(2, "0")}/${String(jd).padStart(2, "0")}`;
+}
+
+function formatJalaliDateFull(jy: number, jm: number, jd: number) {
+  return `${jd} ${JALALI_MONTHS[jm - 1]} ${jy}`;
+}
+
+function daysInJalaliMonth(jy: number, jm: number) {
+  return jalaali.jalaaliMonthLength(jy, jm);
+}
+
+function jalaliDayOfWeek(jy: number, jm: number, jd: number) {
+  const g = jalaliToGregorian(jy, jm, jd);
+  const d = new Date(g.gy, g.gm - 1, g.gd);
+  return (d.getDay() + 1) % 7;
 }
 
 /* ------------------------------------------------------------------ */
@@ -31,6 +56,13 @@ interface Shop {
   category_slug: string;
   distance: number;
   image_url: string;
+  telegram: string | null;
+  instagram: string | null;
+  whatsapp: string | null;
+  about: string | null;
+  is_bookable: number;
+  slot_duration: number;
+  working_hours?: { day: string; day_of_week: number; open_time: string; close_time: string; is_closed: boolean }[];
 }
 
 interface Category {
@@ -45,7 +77,7 @@ interface Comment {
   shopId: number;
   author: string;
   text: string;
-  rating: number;       // 1-5
+  rating: number;
   createdAt: string;
 }
 
@@ -59,12 +91,11 @@ interface RatingSummary {
 /* ------------------------------------------------------------------ */
 
 const TEHRAN: [number, number] = [35.6892, 51.389];
-
 const COMMENTS_KEY = "sf_comments";
 
 const defaultComments: Comment[] = [
   { id: "c1", shopId: 1, author: "علی محمدی", text: "محصولات باکیفیت و قیمت مناسب. حتماً پیشنهاد می‌کنم.", rating: 5, createdAt: "2026-06-08T10:30:00" },
-  { id: "c2", shopId: 1, author: "مررضی احمدی", text: "سرویس خوبی دارن ولی کمی طول می‌کشه.", rating: 4, createdAt: "2026-06-07T14:00:00" },
+  { id: "c2", shopId: 1, author: "مرتضی احمدی", text: "سرویس خوبی دارن ولی کمی طول می‌کشه.", rating: 4, createdAt: "2026-06-07T14:00:00" },
   { id: "c3", shopId: 2, author: "سارا کریمی", text: "بهترین کافه منطقه! قهوه عالیه.", rating: 5, createdAt: "2026-06-09T09:00:00" },
   { id: "c4", shopId: 3, author: "محمد رضایی", text: "قیمت‌ها کمی بالاست.", rating: 3, createdAt: "2026-06-06T16:00:00" },
   { id: "c5", shopId: 4, author: "زهرا حسینی", text: "نظافت عالی و پرسنل خوش‌برخورد.", rating: 5, createdAt: "2026-06-05T11:00:00" },
@@ -113,42 +144,41 @@ function timeAgo(dateStr: string): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Star rating component                                              */
+/*  Star rating                                                        */
 /* ------------------------------------------------------------------ */
 
-function StarRating({
+function Stars({
   value,
   onChange,
-  size = "md",
+  size = 16,
   interactive = false,
 }: {
   value: number;
   onChange?: (v: number) => void;
-  size?: "sm" | "md" | "lg";
+  size?: number;
   interactive?: boolean;
 }) {
   const [hover, setHover] = useState(0);
-  const px = size === "sm" ? 14 : size === "lg" ? 28 : 18;
 
   return (
-    <div className="flex items-center gap-0.5" dir="ltr">
+    <div className="flex items-center gap-px" dir="ltr">
       {[1, 2, 3, 4, 5].map((star) => (
         <button
           key={star}
           type="button"
           disabled={!interactive}
-          className={`transition-transform ${interactive ? "cursor-pointer hover:scale-110" : "cursor-default"}`}
-          style={{ width: px, height: px }}
+          className={`transition-transform ${interactive ? "cursor-pointer active:scale-110" : "cursor-default"}`}
+          style={{ width: size, height: size }}
           onMouseEnter={() => interactive && setHover(star)}
           onMouseLeave={() => interactive && setHover(0)}
           onClick={() => interactive && onChange?.(star)}
         >
-          <svg viewBox="0 0 24 24" width={px} height={px}>
+          <svg viewBox="0 0 24 24" width={size} height={size}>
             <path
               d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
-              fill={star <= (hover || value) ? "#f59e0b" : "#e5e7eb"}
-              stroke={star <= (hover || value) ? "#f59e0b" : "#d1d5db"}
-              strokeWidth="1"
+              fill={star <= (hover || value) ? "#ffb300" : "#e0e0e0"}
+              stroke={star <= (hover || value) ? "#ffb300" : "#ccc"}
+              strokeWidth="0.5"
             />
           </svg>
         </button>
@@ -170,69 +200,39 @@ export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [listOpen, setListOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<Comment[]>(defaultComments);
   const [newComment, setNewComment] = useState("");
   const [newRating, setNewRating] = useState(5);
   const [newAuthor, setNewAuthor] = useState("");
   const [sortBy, setSortBy] = useState<"distance" | "rating">("distance");
-  const [showAutocomplete, setShowAutocomplete] = useState(false);
-  const [showBottomSearch, setShowBottomSearch] = useState(false);
+  const [showSearchOverlay, setShowSearchOverlay] = useState(false);
+  const [sheetDragY, setSheetDragY] = useState(0);
+  const [commentsDragY, setCommentsDragY] = useState(0);
+  const [shopDetail, setShopDetail] = useState<Shop | null>(null);
+  const [showBooking, setShowBooking] = useState(false);
+  const [bookingJalali, setBookingJalali] = useState(() => {
+    const now = new Date();
+    return gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  });
+  const [bookingDate, setBookingDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [bookingSlots, setBookingSlots] = useState<{ time: string; available: boolean }[]>([]);
+  const [selectedSlot, setSelectedSlot] = useState("");
+  const [bookingName, setBookingName] = useState("");
+  const [bookingPhone, setBookingPhone] = useState("");
+  const [bookingSuccess, setBookingSuccess] = useState(false);
+  const sheetStartY = useRef(0);
+  const commentsStartY = useRef(0);
 
-  const mapRef = useRef<any>(null);
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const markersRef = useRef<any[]>([]);
-  const leafletLoaded = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  /* ---- Load comments from localStorage ---- */
-  useEffect(() => {
-    setComments(loadComments());
-  }, []);
+  useEffect(() => { setComments(loadComments()); }, []);
 
-  /* ---- Load Leaflet CSS from npm ---- */
-  useEffect(() => {
-    if (leafletLoaded.current) return;
-    leafletLoaded.current = true;
-    import("leaflet/dist/leaflet.css").catch(() => {/* fallback to CDN */}
-    );
-  }, []);
-
-  /* ---- Debounce search ---- */
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  /* ---- Init map ---- */
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-    const loadMap = async () => {
-      const leaflet = await getLeaflet();
-      const map = leaflet.map(mapContainerRef.current!, {
-        center: TEHRAN,
-        zoom: 13,
-        zoomControl: false,
-        attributionControl: false,
-      });
-      leaflet
-        .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 })
-        .addTo(map);
-      leaflet.control.zoom({ position: "bottomleft" }).addTo(map);
-      mapRef.current = map;
-      map.on("click", () => setSelectedShop(null));
-    };
-    loadMap();
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
-
-  /* ---- Fetch categories ---- */
   const fetchCategories = useCallback(async () => {
     try {
       const res = await fetch("/api/categories");
@@ -241,72 +241,38 @@ export default function Home() {
     } catch { /* ignore */ }
   }, []);
 
-  /* ---- Fetch shops ---- */
   const fetchShops = useCallback(async () => {
     try {
-      const params = new URLSearchParams({
-        lat: String(TEHRAN[0]),
-        lng: String(TEHRAN[1]),
-        radius: "15000",
-      });
+      const params = new URLSearchParams({ lat: String(TEHRAN[0]), lng: String(TEHRAN[1]), radius: "15000" });
       if (selectedCategory) params.set("category", selectedCategory);
       if (openOnly) params.set("open", "true");
       if (debouncedQuery) params.set("q", debouncedQuery);
       const res = await fetch(`/api/shops?${params}`);
       const data = await res.json();
       setShops(data.shops || []);
-    } catch (err) {
-      console.error("Failed to fetch:", err);
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
   }, [selectedCategory, openOnly, debouncedQuery]);
 
   useEffect(() => { fetchCategories(); }, [fetchCategories]);
   useEffect(() => { fetchShops(); }, [fetchShops]);
 
-  /* ---- Update markers ---- */
   useEffect(() => {
-    if (!mapRef.current) return;
-    getLeaflet().then((L) => {
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
-      shops.forEach((shop) => {
-        const rating = getRatingSummary(shop.id, comments);
-        const color = shop.is_open ? "#16a34a" : "#dc2626";
-        const stars = rating.avg > 0 ? "★".repeat(Math.round(rating.avg)) : "";
-        const icon = L.divIcon({
-          html: `<div style="
-            position:relative;width:38px;height:38px;
-            background:${color};
-            border-radius:50% 50% 50% 0;
-            transform:rotate(-45deg);
-            display:flex;align-items:center;justify-content:center;
-            font-size:15px;border:3px solid white;
-            box-shadow:0 2px 8px rgba(0,0,0,0.3);
-          ">${shop.category_icon}</div>
-          ${stars ? `<div style="
-            position:absolute;top:-8px;left:-8px;
-            background:#f59e0b;color:white;font-size:9px;
-            border-radius:8px;padding:1px 4px;
-            box-shadow:0 1px 3px rgba(0,0,0,0.2);
-          ">${stars}</div>` : ""}`,
-          className: "custom-marker",
-          iconSize: [38, 38],
-          iconAnchor: [19, 38],
-        });
-        const marker = L.marker([shop.latitude, shop.longitude], { icon })
-          .addTo(mapRef.current)
-          .on("click", () => {
-            setSelectedShop(shop);
-            setShowComments(false);
-          });
-        markersRef.current.push(marker);
-      });
-    });
-  }, [shops, comments]);
+    if (!selectedShop) { setShopDetail(null); return; }
+    fetch(`/api/shops/${selectedShop.id}`)
+      .then((r) => r.json())
+      .then((d) => setShopDetail(d))
+      .catch(() => {});
+  }, [selectedShop?.id]);
 
-  /* ---- Sort shops ---- */
+  useEffect(() => {
+    if (!showBooking || !selectedShop) return;
+    fetch(`/api/shops/${selectedShop.id}/slots?date=${bookingDate}`)
+      .then((r) => r.json())
+      .then((d) => setBookingSlots(d.slots || []))
+      .catch(() => {});
+  }, [showBooking, bookingDate, selectedShop?.id]);
+
   const sortedShops = [...shops].sort((a, b) => {
     if (sortBy === "rating") {
       const ra = getRatingSummary(a.id, comments).avg;
@@ -316,7 +282,6 @@ export default function Home() {
     return a.distance - b.distance;
   });
 
-  /* ---- Submit comment ---- */
   function submitComment() {
     if (!selectedShop || !newComment.trim() || !newAuthor.trim()) return;
     const c: Comment = {
@@ -334,93 +299,92 @@ export default function Home() {
     setNewRating(5);
   }
 
-  /* ---- Fly to shop ---- */
+  async function submitBooking() {
+    if (!selectedShop || !bookingName.trim() || !bookingPhone.trim() || !selectedSlot) return;
+    try {
+      const res = await fetch("/api/appointments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop_id: selectedShop.id,
+          customer_name: bookingName.trim(),
+          customer_phone: bookingPhone.trim(),
+          date: bookingDate,
+          time_slot: selectedSlot,
+        }),
+      });
+      if (res.ok) {
+        setBookingSuccess(true);
+        setTimeout(() => {
+          setShowBooking(false);
+          setBookingSuccess(false);
+          setSelectedSlot("");
+          setBookingName("");
+          setBookingPhone("");
+        }, 2000);
+      }
+    } catch { /* ignore */ }
+  }
+
   function flyToShop(shop: Shop) {
-    if (mapRef.current) {
-      mapRef.current.flyTo([shop.latitude, shop.longitude], 15, { duration: 0.5 });
-    }
     setSelectedShop(shop);
     setShowComments(false);
-    setListOpen(false);
+    setShowSearchOverlay(false);
+  }
+
+  function handleMapShopClick(lat: number, lng: number) {
+    const shop = shops.find((s) => s.latitude === lat && s.longitude === lng);
+    if (shop) {
+      setSelectedShop(shop);
+      setShowComments(false);
+    }
   }
 
   const openShops = shops.filter((s) => s.is_open).length;
 
-  /* ---- Autocomplete: show suggestions after 3 chars ---- */
-  const suggestions = searchQuery.trim().length >= 3
-    ? shops.filter((s) => s.name.includes(searchQuery.trim())).slice(0, 6)
+  const suggestions = searchQuery.trim().length >= 2
+    ? shops.filter((s) => s.name.includes(searchQuery.trim())).slice(0, 8)
     : [];
 
-  /* ---- Blur overlay when panel is open ---- */
-  const isPanelOpen = selectedShop !== null || showBottomSearch;
+  const isPanelOpen = selectedShop !== null || showSearchOverlay || showBooking;
 
   /* ================================================================ */
   /*  RENDER                                                           */
   /* ================================================================ */
 
   return (
-    <div className="h-full w-full relative overflow-hidden bg-gray-100" dir="rtl">
+    <div className="h-full w-full relative overflow-hidden bg-[#f0f0f0]" dir="rtl">
 
-      {/* ============ MAP ============ */}
-      <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
+      {/* MAP */}
+      <div className="absolute inset-0 w-full h-full">
+        <MapView
+          onShopClick={handleMapShopClick}
+          onMapClick={() => { setSelectedShop(null); setShowComments(false); }}
+          shops={shops}
+          comments={comments}
+          selectedShop={selectedShop}
+        />
+      </div>
 
-      {/* ============ BLUR OVERLAY ============ */}
+      {/* BACKDROP */}
       {isPanelOpen && (
         <div
-          className="absolute inset-0 z-[999] bg-black/30 backdrop-blur-sm transition-all duration-300"
-          onClick={() => { setSelectedShop(null); setShowBottomSearch(false); }}
+          className="absolute inset-0 z-[999] bg-black/20 animate-fade-in"
+          onClick={() => { setSelectedShop(null); setShowComments(false); setShowSearchOverlay(false); setShowBooking(false); }}
         />
       )}
 
-      {/* ============ TOP BAR (Yandex style) ============ */}
-      <div className="absolute top-0 left-0 right-0 z-[1000] p-3 pt-2 space-y-2">
-
-        {/* Search bar — Yandex style rounded */}
-        <div className="relative bg-white rounded-2xl shadow-lg flex items-center gap-2 px-4 py-3">
-          <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="جستجوی مغازه، رستوران، کافه..."
-            value={searchQuery}
-            onChange={(e) => { setSearchQuery(e.target.value); setShowAutocomplete(true); }}
-            onFocus={() => setShowAutocomplete(true)}
-            onBlur={() => setTimeout(() => setShowAutocomplete(false), 200)}
-            className="flex-1 text-sm border-none outline-none text-gray-800 placeholder-gray-400 bg-transparent"
-          />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery("")} className="w-6 h-6 rounded-full bg-gray-200 text-gray-500 text-xs flex items-center justify-center">✕</button>
-          )}
-
-          {/* Autocomplete dropdown */}
-          {showAutocomplete && suggestions.length > 0 && (
-            <div className="absolute top-full right-0 left-0 mt-1 bg-white rounded-xl shadow-xl overflow-hidden z-50">
-              {suggestions.map((s) => (
-                <button
-                  key={s.id}
-                  className="w-full px-4 py-2.5 flex items-center gap-2 hover:bg-blue-50 active:bg-blue-100 transition-colors text-right"
-                  onMouseDown={(e) => { e.preventDefault(); flyToShop(s); setShowAutocomplete(false); }}
-                >
-                  <span className="text-base">{s.category_icon}</span>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-800 truncate block">{s.name}</span>
-                    <span className="text-xs text-gray-400">{s.category_name}</span>
-                  </div>
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.is_open ? "bg-green-500" : "bg-red-500"}`} />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Category chips — Yandex style horizontal scroll */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+      {/* ============================================================ */}
+      {/*  TOP BAR                                                      */}
+      {/* ============================================================ */}
+      <div className={`absolute top-0 left-0 right-0 z-[1000] px-3 pt-[calc(var(--top-safe)+8px)] ${showSearchOverlay ? "hidden" : ""}`}>
+        <div className="flex gap-2 overflow-x-auto no-scrollbar py-2.5 px-0.5">
           <button
             onClick={() => setSelectedCategory("")}
-            className={`flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
-              !selectedCategory ? "bg-blue-600 text-white shadow-md" : "bg-white text-gray-600 shadow-sm"
+            className={`flex-shrink-0 h-[34px] px-4 rounded-full text-[13px] font-medium transition-all btn-press ${
+              !selectedCategory
+                ? "bg-[#fc3f1d] text-white shadow-sm"
+                : "bg-white text-[#333] shadow-[var(--yandex-shadow)]"
             }`}
           >
             همه
@@ -429,442 +393,778 @@ export default function Home() {
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(selectedCategory === cat.name_en ? "" : cat.name_en)}
-              className={`flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
-                selectedCategory === cat.name_en ? "bg-blue-600 text-white shadow-md" : "bg-white text-gray-600 shadow-sm"
+              className={`flex-shrink-0 h-[34px] px-4 rounded-full text-[13px] font-medium whitespace-nowrap transition-all btn-press flex items-center gap-1.5 ${
+                selectedCategory === cat.name_en
+                  ? "bg-[#fc3f1d] text-white shadow-sm"
+                  : "bg-white text-[#333] shadow-[var(--yandex-shadow)]"
               }`}
             >
-              {cat.icon} {cat.name}
+              <span className="text-[14px]">{cat.icon}</span>
+              {cat.name}
             </button>
           ))}
         </div>
 
-        {/* Filter bar — Yandex style */}
-        <div className="flex items-center justify-between gap-2">
+        {/* Filter bar */}
+        <div className="flex items-center justify-between pb-2">
           <div className="flex items-center gap-2">
-            <span className="bg-white rounded-full shadow-sm px-3 py-1.5 text-xs text-gray-500">
-              {loading ? "..." : `${shops.length} مغازه`}
+            <span className="bg-white rounded-full shadow-[var(--yandex-shadow)] px-3 h-[30px] flex items-center text-[12px] text-[#666]">
+              {loading ? (
+                <span className="skeleton w-12 h-3" />
+              ) : (
+                <>{shops.length} مغازه</>
+              )}
             </span>
             <button
               onClick={() => setOpenOnly(!openOnly)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all shadow-sm ${
-                openOnly ? "bg-green-500 text-white" : "bg-white text-gray-600"
+              className={`flex items-center gap-1.5 h-[30px] px-3 rounded-full text-[12px] font-medium transition-all btn-press ${
+                openOnly
+                  ? "bg-[#00b341] text-white shadow-sm"
+                  : "bg-white text-[#666] shadow-[var(--yandex-shadow)]"
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${openOnly ? "bg-white" : "bg-green-500"}`} />
-              باز ({openShops})
+              <span className={`w-1.5 h-1.5 rounded-full ${openOnly ? "bg-white" : "bg-[#00b341]"}`} />
+              باز
             </button>
           </div>
-          <div className="flex items-center gap-1 bg-white rounded-full shadow-sm p-0.5">
+          <div className="flex items-center bg-white rounded-full shadow-[var(--yandex-shadow)] p-0.5 h-[30px]">
             <button
               onClick={() => setSortBy("distance")}
-              className={`px-3 py-1 rounded-full text-xs transition-all ${sortBy === "distance" ? "bg-blue-600 text-white" : "text-gray-500"}`}
+              className={`px-3 h-full rounded-full text-[12px] font-medium transition-all ${
+                sortBy === "distance" ? "bg-[#fc3f1d] text-white" : "text-[#666]"
+              }`}
             >
               نزدیک‌ترین
             </button>
             <button
               onClick={() => setSortBy("rating")}
-              className={`px-3 py-1 rounded-full text-xs transition-all ${sortBy === "rating" ? "bg-blue-600 text-white" : "text-gray-500"}`}
+              className={`px-3 h-full rounded-full text-[12px] font-medium transition-all ${
+                sortBy === "rating" ? "bg-[#fc3f1d] text-white" : "text-[#666]"
+              }`}
             >
-              بهترین امتیاز
+              بهترین
             </button>
           </div>
         </div>
       </div>
 
-      {/* ============ LOCATION BUTTON ============ */}
-      <button
-        onClick={() => {
-          navigator.geolocation?.getCurrentPosition((pos) => {
-            mapRef.current?.flyTo([pos.coords.latitude, pos.coords.longitude], 14);
-          });
-        }}
-        className="absolute bottom-[160px] left-3 z-[1000] w-11 h-11 bg-white rounded-full shadow-lg flex items-center justify-center text-xl active:scale-95 transition-transform"
-      >
-        📍
-      </button>
-
-      {/* ============ BOTTOM SHEET: Selected shop ============ */}
+      {/* ============================================================ */}
+      {/*  SHOP DETAIL BOTTOM SHEET                                     */}
+      {/* ============================================================ */}
       {selectedShop && !showComments && (
-        <div className="absolute bottom-0 left-0 right-0 z-[1000] animate-slide-up">
-          <div className="bg-white rounded-t-3xl shadow-[0_-4px_30px_rgba(0,0,0,0.15)] max-h-[75vh] overflow-y-auto">
-
-            {/* Handle + close */}
-            <div className="flex items-center justify-between px-4 pt-3 pb-1">
-              <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto" />
-              <button onClick={() => setSelectedShop(null)} className="absolute left-4 top-2 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 text-sm">✕</button>
-            </div>
-
-            {/* Image */}
-            <div className="relative mx-4 h-40 bg-gradient-to-br from-gray-200 to-gray-300 rounded-2xl overflow-hidden mb-4">
-              <img
-                src={selectedShop.image_url}
-                alt={selectedShop.name}
-                className="w-full h-full object-cover"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-              <div className="absolute top-3 right-3 flex gap-2">
-                <span className={`px-3 py-1 rounded-full text-xs font-bold ${selectedShop.is_open ? "bg-green-500 text-white" : "bg-red-500 text-white"}`}>
-                  {selectedShop.is_open ? "باز" : "بسته"}
-                </span>
-              </div>
-              <div className="absolute bottom-3 left-3">
-                <span className="bg-black/50 backdrop-blur-sm text-white px-3 py-1 rounded-full text-xs">
-                  {selectedShop.category_icon} {selectedShop.category_name}
-                </span>
-              </div>
-            </div>
-
-            {/* Info */}
-            <div className="px-4 pb-2">
-              <h2 className="text-lg font-bold text-gray-900 mb-1">{selectedShop.name}</h2>
-              <p className="text-sm text-gray-500 mb-3">{selectedShop.description}</p>
-
-              {/* Rating summary */}
-              {(() => {
-                const r = getRatingSummary(selectedShop.id, comments);
-                return (
-                  <div className="flex items-center gap-2 mb-3 bg-amber-50 rounded-xl px-3 py-2">
-                    <StarRating value={Math.round(r.avg)} size="sm" />
-                    <span className="text-sm font-bold text-amber-700">{r.avg > 0 ? r.avg.toFixed(1) : "بدون امتیاز"}</span>
-                    <span className="text-xs text-amber-600">({r.count} نظر)</span>
-                    <button
-                      onClick={() => setShowComments(true)}
-                      className="mr-auto text-xs text-blue-600 font-medium"
-                    >
-                      مشاهده نظرات ←
-                    </button>
-                  </div>
-                );
-              })()}
-
-              {/* Details */}
-              <div className="text-sm text-gray-500 space-y-2 mb-4">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">📍</span>
-                  <span>{selectedShop.address}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-base">📞</span>
-                  <span dir="ltr" className="text-blue-600">{selectedShop.phone}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-base">📏</span>
-                  <span>{formatDistance(selectedShop.distance)}</span>
-                </div>
-              </div>
-
-              {/* Action buttons — Yandex style */}
-              <div className="flex gap-2 mb-4">
-                <a
-                  href={`tel:${selectedShop.phone}`}
-                  className="flex-1 bg-blue-600 text-white text-center py-3 rounded-2xl text-sm font-bold active:scale-95 transition-transform"
-                >
-                  📞 تماس
-                </a>
-                <a
-                  href={`https://www.google.com/maps?q=${selectedShop.latitude},${selectedShop.longitude}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 bg-gray-100 text-gray-700 text-center py-3 rounded-2xl text-sm font-bold active:scale-95 transition-transform"
-                >
-                  🗺️ مسیریابی
-                </a>
-              </div>
-
-              {/* Quick comment teaser */}
-              {(() => {
-                const shopComments = comments.filter((c) => c.shopId === selectedShop.id).slice(0, 2);
-                if (shopComments.length === 0) return null;
-                return (
-                  <div className="border-t border-gray-100 pt-3 mb-3">
-                    <p className="text-xs text-gray-400 mb-2">آخرین نظرات:</p>
-                    {shopComments.map((c) => (
-                      <div key={c.id} className="bg-gray-50 rounded-xl p-2.5 mb-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium text-gray-700">{c.author}</span>
-                          <StarRating value={c.rating} size="sm" />
-                        </div>
-                        <p className="text-xs text-gray-500">{c.text}</p>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ============ COMMENTS PANEL ============ */}
-      {selectedShop && showComments && (
-        <div className="absolute bottom-0 left-0 right-0 z-[1000] animate-slide-up">
-          <div className="bg-white rounded-t-3xl shadow-[0_-4px_30px_rgba(0,0,0,0.15)] max-h-[80vh] overflow-y-auto">
-
-            {/* Header */}
-            <div className="sticky top-0 bg-white px-4 pt-3 pb-2 border-b border-gray-100 z-10">
-              <div className="flex items-center justify-between">
-                <button onClick={() => setShowComments(false)} className="text-blue-600 text-sm font-medium">
-                  → بازگشت
-                </button>
-                <h3 className="text-sm font-bold text-gray-800">نظرات {selectedShop.name}</h3>
-                <div className="w-12" />
-              </div>
-              {(() => {
-                const r = getRatingSummary(selectedShop.id, comments);
-                return (
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="text-2xl font-bold text-amber-600">{r.avg > 0 ? r.avg.toFixed(1) : "—"}</span>
-                    <StarRating value={Math.round(r.avg)} size="md" />
-                    <span className="text-xs text-gray-400">({r.count} نظر)</span>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* New comment form */}
-            <div className="px-4 py-3 border-b border-gray-100 bg-blue-50/50">
-              <p className="text-xs font-medium text-gray-600 mb-2">نظر خود را بنویسید:</p>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-gray-500">امتیاز:</span>
-                <StarRating value={newRating} onChange={setNewRating} size="md" interactive />
-              </div>
-              <input
-                type="text"
-                placeholder="نام شما"
-                value={newAuthor}
-                onChange={(e) => setNewAuthor(e.target.value)}
-                className="w-full mb-2 px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-400 bg-white"
-              />
-              <textarea
-                placeholder="تجربه خود را بنویسید..."
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-400 resize-none bg-white"
-              />
-              <button
-                onClick={submitComment}
-                disabled={!newComment.trim() || !newAuthor.trim()}
-                className="mt-2 w-full bg-blue-600 text-white py-2.5 rounded-xl text-sm font-bold disabled:opacity-40 active:scale-95 transition-transform"
-              >
-                ثبت نظر
-              </button>
-            </div>
-
-            {/* Comments list */}
-            <div className="px-4 py-3">
-              {comments.filter((c) => c.shopId === selectedShop.id).length === 0 ? (
-                <div className="text-center py-8 text-gray-400 text-sm">
-                  هنوز نظری ثبت نشده. اولین نفر باشید!
-                </div>
-              ) : (
-                comments
-                  .filter((c) => c.shopId === selectedShop.id)
-                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-                  .map((c) => (
-                    <div key={c.id} className="py-3 border-b border-gray-50 last:border-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-bold">
-                            {c.author.charAt(0)}
-                          </div>
-                          <span className="text-sm font-medium text-gray-800">{c.author}</span>
-                        </div>
-                        <span className="text-xs text-gray-400">{timeAgo(c.createdAt)}</span>
-                      </div>
-                      <div className="mr-10">
-                        <StarRating value={c.rating} size="sm" />
-                        <p className="text-sm text-gray-600 mt-1 leading-relaxed">{c.text}</p>
-                      </div>
-                    </div>
-                  ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ============ BOTTOM SEARCH + LIST (Yandex style with blur) ============ */}
-      {!selectedShop && (
-        <div className="absolute bottom-0 left-0 right-0 z-[1000]">
-          {/* Search bar at bottom */}
-          <div className="px-3 pb-2">
+        <div
+          className="absolute bottom-0 left-0 right-0 z-[1000] animate-slide-up"
+          style={{ transform: sheetDragY > 0 ? `translateY(${sheetDragY}px)` : undefined, transition: sheetDragY === 0 ? "transform 0.2s ease" : undefined }}
+        >
+          <div className="bg-white rounded-t-[20px] shadow-[0_-2px_20px_rgba(0,0,0,0.1)] max-h-[70vh] overflow-hidden flex flex-col">
+            {/* Handle */}
             <div
-              className="bg-white rounded-2xl shadow-lg flex items-center gap-2 px-4 py-3 active:scale-[0.98] transition-transform cursor-pointer"
-              onClick={() => setShowBottomSearch(true)}
+              className="flex-shrink-0 cursor-grab py-2"
+              onTouchStart={(e) => { sheetStartY.current = e.touches[0].clientY; }}
+              onTouchMove={(e) => {
+                const dy = e.touches[0].clientY - sheetStartY.current;
+                if (dy > 0) setSheetDragY(dy);
+              }}
+              onTouchEnd={() => {
+                if (sheetDragY > 100) {
+                  setSelectedShop(null);
+                }
+                setSheetDragY(0);
+              }}
             >
-              <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <span className="flex-1 text-sm text-gray-400">{searchQuery || "جستجوی مغازه..."}</span>
-              <span className="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full">{shops.length}</span>
+              <div className="sheet-handle" />
             </div>
-          </div>
 
-          {/* Full-screen search overlay with blur */}
-          {showBottomSearch && (
-            <div className="fixed inset-0 z-[2000] animate-slide-up">
-              <div className="bg-white h-full flex flex-col">
-                {/* Search header */}
-                <div className="flex items-center gap-2 p-3 border-b border-gray-100">
-                  <button onClick={() => setShowBottomSearch(false)} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-500">✕</button>
-                  <div className="flex-1 relative">
-                    <input
-                      type="text"
-                      placeholder="جستجوی مغازه، رستوران، کافه..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      autoFocus
-                      className="w-full bg-gray-100 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-400"
-                    />
-                    {searchQuery && (
-                      <button onClick={() => setSearchQuery("")} className="absolute left-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray-300 text-gray-600 text-xs flex items-center justify-center">✕</button>
-                    )}
+            {/* Scrollable content */}
+            <div className="overflow-y-auto flex-1 overscroll-contain">
+              {/* Hero image */}
+              <div className="relative mx-3 h-[160px] rounded-2xl overflow-hidden bg-[#f0f0f0]">
+                <img
+                  src={selectedShop.image_url}
+                  alt={selectedShop.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+                <div className="absolute top-3 right-3 flex gap-2">
+                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold backdrop-blur-sm ${
+                    selectedShop.is_open
+                      ? "bg-[#00b341]/90 text-white"
+                      : "bg-[#ff4444]/90 text-white"
+                  }`}>
+                    {selectedShop.is_open ? "باز" : "بسته"}
+                  </span>
+                </div>
+                <div className="absolute bottom-3 left-3">
+                  <span className="bg-black/50 backdrop-blur-sm text-white px-2.5 py-1 rounded-full text-[11px] font-medium">
+                    {selectedShop.category_icon} {selectedShop.category_name}
+                  </span>
+                </div>
+              </div>
+
+              {/* Info */}
+              <div className="px-4 pt-3 pb-2">
+                <h2 className="text-[18px] font-bold text-[#1a1a1a] leading-tight">{selectedShop.name}</h2>
+                <p className="text-[13px] text-[#666] mt-1 leading-relaxed">{selectedShop.description}</p>
+
+                {/* About */}
+                {(shopDetail?.about || selectedShop.about) && (
+                  <div className="mt-3 bg-[#f9f9f9] rounded-xl px-3 py-2.5">
+                    <p className="text-[11px] font-medium text-[#999] mb-1 uppercase tracking-wider">درباره ما</p>
+                    <p className="text-[12px] text-[#555] leading-relaxed">{shopDetail?.about || selectedShop.about}</p>
                   </div>
-                </div>
-
-                {/* Category chips */}
-                <div className="flex gap-2 px-3 py-2 overflow-x-auto no-scrollbar border-b border-gray-50">
-                  <button
-                    onClick={() => setSelectedCategory("")}
-                    className={`flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${!selectedCategory ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}
-                  >
-                    همه
-                  </button>
-                  {categories.map((cat) => (
-                    <button
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(selectedCategory === cat.name_en ? "" : cat.name_en)}
-                      className={`flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${selectedCategory === cat.name_en ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"}`}
-                    >
-                      {cat.icon} {cat.name}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Sort + filter bar */}
-                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-50">
-                  <button
-                    onClick={() => setOpenOnly(!openOnly)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${openOnly ? "bg-green-500 text-white" : "bg-gray-100 text-gray-600"}`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${openOnly ? "bg-white" : "bg-green-500"}`} />
-                    باز ({openShops})
-                  </button>
-                  <div className="flex items-center gap-1 bg-gray-100 rounded-full p-0.5">
-                    <button onClick={() => setSortBy("distance")} className={`px-3 py-1 rounded-full text-xs transition-all ${sortBy === "distance" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500"}`}>نزدیک‌ترین</button>
-                    <button onClick={() => setSortBy("rating")} className={`px-3 py-1 rounded-full text-xs transition-all ${sortBy === "rating" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500"}`}>بهترین امتیاز</button>
-                  </div>
-                </div>
-
-                {/* Autocomplete hint */}
-                {searchQuery.trim().length > 0 && searchQuery.trim().length < 3 && (
-                  <div className="px-4 py-2 text-xs text-gray-400 text-center bg-gray-50">حداقل ۳ حرف برای جستجو تایپ کنید</div>
                 )}
 
-                {/* Results list */}
-                <div className="flex-1 overflow-y-auto">
-                  {loading ? (
-                    Array.from({ length: 4 }).map((_, i) => (
-                      <div key={i} className="p-3 flex gap-3 border-b border-gray-50">
-                        <div className="w-14 h-14 rounded-xl skeleton flex-shrink-0" />
-                        <div className="flex-1 space-y-2 py-1">
-                          <div className="h-3.5 rounded skeleton w-3/4" />
-                          <div className="h-2.5 rounded skeleton w-1/2" />
-                        </div>
+                {/* Rating */}
+                {(() => {
+                  const r = getRatingSummary(selectedShop.id, comments);
+                  return (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setShowComments(true)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowComments(true); }}
+                      className="w-full flex items-center gap-2.5 mt-3 bg-[#fff8e1] rounded-xl px-3 py-2.5 btn-press cursor-pointer"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[18px] font-bold text-[#f57f17]">
+                          {r.avg > 0 ? r.avg.toFixed(1) : "—"}
+                        </span>
+                        <Stars value={Math.round(r.avg)} size={14} />
                       </div>
-                    ))
-                  ) : sortedShops.length === 0 ? (
-                    <div className="p-8 text-center text-gray-400 text-sm">مغازه‌ای یافت نشد</div>
-                  ) : (
-                    sortedShops.map((shop) => {
-                      const r = getRatingSummary(shop.id, comments);
-                      return (
-                        <div
-                          key={shop.id}
-                          onClick={() => flyToShop(shop)}
-                          className="p-3 flex gap-3 border-b border-gray-50 active:bg-gray-50 cursor-pointer transition-colors"
-                        >
-                          <div className="w-14 h-14 rounded-xl bg-gray-200 overflow-hidden flex-shrink-0">
-                            <img src={shop.image_url} alt={shop.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <span className="text-sm font-semibold text-gray-900 truncate">{shop.name}</span>
-                              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${shop.is_open ? "bg-green-500" : "bg-red-500"}`} />
-                            </div>
-                            <p className="text-xs text-gray-400 mb-1">{shop.category_icon} {shop.category_name}</p>
-                            <div className="flex items-center gap-2">
-                              {r.count > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs">★</span>
-                                  <span className="text-xs font-medium text-amber-600">{r.avg.toFixed(1)}</span>
-                                  <span className="text-xs text-gray-400">({r.count})</span>
-                                </div>
-                              )}
-                              <span className="text-xs text-gray-400">📍 {formatDistance(shop.distance)}</span>
-                            </div>
-                          </div>
-                          <a
-                            href={`tel:${shop.phone}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center text-sm self-center"
-                          >
-                            📞
-                          </a>
-                        </div>
-                      );
-                    })
-                  )}
+                      <span className="text-[12px] text-[#999]">({r.count} نظر)</span>
+                      <span className="mr-auto text-[12px] font-medium text-[#fc3f1d]">مشاهده نظرات</span>
+                    </div>
+                  );
+                })()}
+
+                {/* Details */}
+                <div className="mt-3 space-y-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <span className="w-8 h-8 rounded-lg bg-[#f5f5f5] flex items-center justify-center text-[14px] flex-shrink-0 mt-0.5">📍</span>
+                    <span className="text-[13px] text-[#333] leading-relaxed">{selectedShop.address}</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-8 h-8 rounded-lg bg-[#f5f5f5] flex items-center justify-center text-[14px] flex-shrink-0">📞</span>
+                    <span dir="ltr" className="text-[13px] text-[#fc3f1d] font-medium">{selectedShop.phone}</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-8 h-8 rounded-lg bg-[#f5f5f5] flex items-center justify-center text-[14px] flex-shrink-0">📏</span>
+                    <span className="text-[13px] text-[#666]">{formatDistance(selectedShop.distance)}</span>
+                  </div>
                 </div>
+
+                {/* Working Hours */}
+                {shopDetail?.working_hours && (
+                  <div className="mt-4 border-t border-[#f0f0f0] pt-3">
+                    <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">ساعات کاری</p>
+                    <div className="space-y-1">
+                      {shopDetail.working_hours.map((h) => (
+                        <div key={h.day_of_week} className={`flex items-center justify-between text-[12px] px-2 py-1 rounded-lg ${h.day_of_week === new Date().getDay() ? "bg-[#fc3f1d]/10 font-medium" : ""}`}>
+                          <span className={`${h.day_of_week === new Date().getDay() ? "text-[#fc3f1d]" : "text-[#333]"}`}>{h.day}</span>
+                          {h.is_closed ? (
+                            <span className="text-[#ff4444]">تعطیل</span>
+                          ) : (
+                            <span className="text-[#666]" dir="ltr">{h.open_time} – {h.close_time}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Social Links */}
+                {(selectedShop.telegram || selectedShop.instagram || selectedShop.whatsapp) && (
+                  <div className="mt-4 border-t border-[#f0f0f0] pt-3">
+                    <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">شبکه‌های اجتماعی</p>
+                    <div className="flex gap-2">
+                      {selectedShop.telegram && (
+                        <a href={selectedShop.telegram} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#229ED9]/10 text-[#229ED9] text-[12px] font-medium btn-press">
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 000 12a12 12 0 0012 12 12 12 0 0012-12A12 12 0 0012 0a12 12 0 00-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 01.171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                          تلگرام
+                        </a>
+                      )}
+                      {selectedShop.instagram && (
+                        <a href={`https://instagram.com/${selectedShop.instagram}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#E4405F]/10 text-[#E4405F] text-[12px] font-medium btn-press">
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+                          اینستاگرام
+                        </a>
+                      )}
+                      {selectedShop.whatsapp && (
+                        <a href={`https://wa.me/${selectedShop.whatsapp}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#25D366]/10 text-[#25D366] text-[12px] font-medium btn-press">
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                          واتساپ
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex gap-2.5 mt-4 mb-2">
+                  <a
+                    href={`tel:${selectedShop.phone}`}
+                    className="flex-1 bg-[#fc3f1d] text-white text-center py-3 rounded-xl text-[14px] font-semibold btn-press flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                    </svg>
+                    تماس
+                  </a>
+                  <a
+                    href={`https://www.google.com/maps?q=${selectedShop.latitude},${selectedShop.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 bg-[#f5f5f5] text-[#333] text-center py-3 rounded-xl text-[14px] font-semibold btn-press flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                    </svg>
+                    مسیریابی
+                  </a>
+                </div>
+
+                {/* Book Appointment Button */}
+                {(shopDetail?.is_bookable || selectedShop.is_bookable) ? (
+                  <button
+                    onClick={() => { setShowBooking(true); setSelectedSlot(""); setBookingSuccess(false); }}
+                    className="w-full bg-[#7c3aed] text-white text-center py-3 rounded-xl text-[14px] font-semibold btn-press flex items-center justify-center gap-2 mt-2.5"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    نوبت‌دهی آنلاین
+                  </button>
+                ) : null}
+
+                {/* Recent comments preview */}
+                {(() => {
+                  const shopComments = comments.filter((c) => c.shopId === selectedShop.id).slice(0, 2);
+                  if (shopComments.length === 0) return null;
+                  return (
+                    <div className="border-t border-[#f0f0f0] pt-3 mt-2">
+                      <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">آخرین نظرات</p>
+                      {shopComments.map((c) => (
+                        <div key={c.id} className="bg-[#f9f9f9] rounded-xl p-3 mb-2">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#fc3f1d] to-[#ff6b35] flex items-center justify-center text-white text-[10px] font-bold">
+                                {c.author.charAt(0)}
+                              </div>
+                              <span className="text-[12px] font-medium text-[#333]">{c.author}</span>
+                            </div>
+                            <Stars value={c.rating} size={12} />
+                          </div>
+                          <p className="text-[12px] text-[#666] leading-relaxed">{c.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {/* Compact list toggle (only when bottom search is closed) */}
-          {!showBottomSearch && (
-            <div className="px-3 pb-4">
-              <button
-                onClick={() => setListOpen(!listOpen)}
-                className="w-full bg-white rounded-2xl shadow-lg px-4 py-3 flex items-center justify-between active:scale-[0.98] transition-transform"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-base">📋</span>
-                  <span className="text-sm font-medium text-gray-700">لیست مغازه‌ها</span>
-                  <span className="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full">{shops.length}</span>
+      {/* ============================================================ */}
+      {/*  COMMENTS BOTTOM SHEET                                         */}
+      {/* ============================================================ */}
+      {selectedShop && showComments && (
+        <div
+          className="absolute bottom-0 left-0 right-0 z-[1000] animate-slide-up"
+          style={{ transform: commentsDragY > 0 ? `translateY(${commentsDragY}px)` : undefined, transition: commentsDragY === 0 ? "transform 0.2s ease" : undefined }}
+        >
+          <div className="bg-white rounded-t-[20px] shadow-[0_-2px_20px_rgba(0,0,0,0.1)] max-h-[80vh] flex flex-col">
+            {/* Handle */}
+            <div
+              className="flex-shrink-0 py-2 cursor-grab"
+              onTouchStart={(e) => { commentsStartY.current = e.touches[0].clientY; }}
+              onTouchMove={(e) => {
+                const dy = e.touches[0].clientY - commentsStartY.current;
+                if (dy > 0) setCommentsDragY(dy);
+              }}
+              onTouchEnd={() => {
+                if (commentsDragY > 100) {
+                  setShowComments(false);
+                }
+                setCommentsDragY(0);
+              }}
+            >
+              <div className="sheet-handle" />
+            </div>
+
+            {/* Sticky header */}
+            <div className="flex-shrink-0 sticky top-0 bg-white border-b border-[#f0f0f0] z-10">
+              <div className="flex items-center justify-between px-4 py-3">
+                <button onClick={() => setShowComments(false)} className="text-[#fc3f1d] text-[13px] font-medium btn-press">
+                  بازگشت
+                </button>
+                <h3 className="text-[14px] font-bold text-[#1a1a1a] truncate max-w-[200px]">نظرات {selectedShop.name}</h3>
+                <div className="w-16" />
+              </div>
+              {(() => {
+                const r = getRatingSummary(selectedShop.id, comments);
+                return (
+                  <div className="flex items-center gap-2 px-4 pb-3">
+                    <span className="text-[24px] font-bold text-[#f57f17]">
+                      {r.avg > 0 ? r.avg.toFixed(1) : "—"}
+                    </span>
+                    <Stars value={Math.round(r.avg)} size={18} />
+                    <span className="text-[12px] text-[#999]">({r.count} نظر)</span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Scrollable */}
+            <div className="overflow-y-auto flex-1 overscroll-contain">
+              {/* New comment form */}
+              <div className="px-4 py-3 border-b border-[#f0f0f0] bg-[#fafafa]">
+                <p className="text-[12px] font-medium text-[#666] mb-2">نظر خود را بنویسید</p>
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="text-[12px] text-[#999]">امتیاز:</span>
+                  <Stars value={newRating} onChange={setNewRating} size={20} interactive />
                 </div>
-                <svg className={`w-4 h-4 text-gray-400 transition-transform ${listOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                </svg>
-              </button>
+                <input
+                  type="text"
+                  placeholder="نام شما"
+                  value={newAuthor}
+                  onChange={(e) => setNewAuthor(e.target.value)}
+                  className="w-full mb-2 px-3 py-2.5 rounded-xl border border-[#e0e0e0] text-[16px] outline-none focus:border-[#fc3f1d] bg-white transition-colors"
+                />
+                <textarea
+                  placeholder="تجربه خود را بنویسید..."
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2.5 rounded-xl border border-[#e0e0e0] text-[16px] outline-none focus:border-[#fc3f1d] resize-none bg-white transition-colors"
+                />
+                <button
+                  onClick={submitComment}
+                  disabled={!newComment.trim() || !newAuthor.trim()}
+                  className="mt-2.5 w-full bg-[#fc3f1d] text-white py-2.5 rounded-xl text-[13px] font-semibold disabled:opacity-30 btn-press"
+                >
+                  ثبت نظر
+                </button>
+              </div>
 
-              {listOpen && (
-                <div className="mt-2 bg-white rounded-2xl shadow-lg max-h-[45vh] overflow-y-auto">
-                  {sortedShops.map((shop) => {
-                    const r = getRatingSummary(shop.id, comments);
-                    return (
-                      <div key={shop.id} onClick={() => flyToShop(shop)} className="p-3 flex gap-3 border-b border-gray-50 active:bg-gray-50 cursor-pointer transition-colors">
-                        <div className="w-12 h-12 rounded-xl bg-gray-200 overflow-hidden flex-shrink-0">
-                          <img src={shop.image_url} alt={shop.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 mb-0.5">
-                            <span className="text-sm font-semibold text-gray-900 truncate">{shop.name}</span>
-                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${shop.is_open ? "bg-green-500" : "bg-red-500"}`} />
-                          </div>
+              {/* Comments list */}
+              <div className="px-4 py-2">
+                {comments.filter((c) => c.shopId === selectedShop.id).length === 0 ? (
+                  <div className="text-center py-10">
+                    <div className="text-[32px] mb-2">💬</div>
+                    <p className="text-[13px] text-[#999]">هنوز نظری ثبت نشده</p>
+                    <p className="text-[12px] text-[#bbb] mt-1">اولین نفر باشید!</p>
+                  </div>
+                ) : (
+                  comments
+                    .filter((c) => c.shopId === selectedShop.id)
+                    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                    .map((c) => (
+                      <div key={c.id} className="py-3 border-b border-[#f5f5f5] last:border-0">
+                        <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            {r.count > 0 && <span className="text-xs font-medium text-amber-600">★ {r.avg.toFixed(1)}</span>}
-                            <span className="text-xs text-gray-400">📍 {formatDistance(shop.distance)}</span>
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#fc3f1d] to-[#ff6b35] flex items-center justify-center text-white text-[11px] font-bold">
+                              {c.author.charAt(0)}
+                            </div>
+                            <div>
+                              <span className="text-[13px] font-medium text-[#1a1a1a] block">{c.author}</span>
+                              <span className="text-[11px] text-[#999]">{timeAgo(c.createdAt)}</span>
+                            </div>
                           </div>
+                          <Stars value={c.rating} size={12} />
                         </div>
-                        <a href={`tel:${shop.phone}`} onClick={(e) => e.stopPropagation()} className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-sm self-center">📞</a>
+                        <p className="text-[13px] text-[#444] leading-relaxed pr-10">{c.text}</p>
                       </div>
-                    );
-                  })}
+                    ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/*  BOOKING PANEL                                                */}
+      {/* ============================================================ */}
+      {selectedShop && showBooking && (
+        <div className="absolute bottom-0 left-0 right-0 z-[1000] animate-slide-up">
+          <div className="bg-white rounded-t-[20px] shadow-[0_-2px_20px_rgba(0,0,0,0.1)] max-h-[80vh] flex flex-col">
+            <div className="flex-shrink-0 py-2 cursor-grab">
+              <div className="sheet-handle" />
+            </div>
+
+            <div className="flex-shrink-0 sticky top-0 bg-white border-b border-[#f0f0f0] z-10">
+              <div className="flex items-center justify-between px-4 py-3">
+                <button onClick={() => setShowBooking(false)} className="text-[#fc3f1d] text-[13px] font-medium btn-press">
+                  بازگشت
+                </button>
+                <h3 className="text-[14px] font-bold text-[#1a1a1a]">نوبت‌دهی {selectedShop.name}</h3>
+                <div className="w-16" />
+              </div>
+            </div>
+
+            <div className="overflow-y-auto flex-1 overscroll-contain p-4">
+              {bookingSuccess ? (
+                <div className="text-center py-10">
+                  <div className="text-[48px] mb-3">✅</div>
+                  <p className="text-[16px] font-bold text-[#00b341]">نوبت شما با موفقیت ثبت شد!</p>
+                  <p className="text-[13px] text-[#666] mt-2">{formatJalaliDateFull(bookingJalali.jy, bookingJalali.jm, bookingJalali.jd)} — {selectedSlot}</p>
                 </div>
+              ) : (
+                <>
+                  {/* Jalali Date Picker */}
+                  <div className="mb-4">
+                    <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">انتخاب تاریخ</p>
+                    <div className="bg-white rounded-xl border border-[#e0e0e0] overflow-hidden">
+                      {/* Month header */}
+                      <div className="flex items-center justify-between px-3 py-2.5 bg-[#f9f9f9]">
+                        <button
+                          onClick={() => {
+                            let newM = bookingJalali.jm - 1;
+                            let newY = bookingJalali.jy;
+                            if (newM < 1) { newM = 12; newY--; }
+                            setBookingJalali({ jy: newY, jm: newM, jd: 1 });
+                          }}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-[#666] btn-press"
+                        >
+                          ▸
+                        </button>
+                        <span className="text-[14px] font-semibold text-[#333]">
+                          {JALALI_MONTHS[bookingJalali.jm - 1]} {bookingJalali.jy}
+                        </span>
+                        <button
+                          onClick={() => {
+                            let newM = bookingJalali.jm + 1;
+                            let newY = bookingJalali.jy;
+                            if (newM > 12) { newM = 1; newY++; }
+                            setBookingJalali({ jy: newY, jm: newM, jd: 1 });
+                          }}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-[#666] btn-press"
+                        >
+                          ◂
+                        </button>
+                      </div>
+
+                      {/* Weekday headers */}
+                      <div className="grid grid-cols-7 border-b border-[#f0f0f0]">
+                        {JALALI_WEEKDAYS.map((d) => (
+                          <div key={d} className="text-center py-1.5 text-[10px] font-medium text-[#999]">
+                            {d === "جمعه" ? "ج" : d.slice(0, 1)}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Days grid */}
+                      {(() => {
+                        const daysCount = daysInJalaliMonth(bookingJalali.jy, bookingJalali.jm);
+                        const firstDayJalali = jalaliDayOfWeek(bookingJalali.jy, bookingJalali.jm, 1);
+                        const today = new Date();
+                        const todayJalali = gregorianToJalali(today.getFullYear(), today.getMonth() + 1, today.getDate());
+                        const isCurrentMonth = todayJalali.jy === bookingJalali.jy && todayJalali.jm === bookingJalali.jm;
+
+                        const cells: (number | null)[] = [];
+                        for (let i = 0; i < firstDayJalali; i++) cells.push(null);
+                        for (let d = 1; d <= daysCount; d++) cells.push(d);
+
+                        return (
+                          <div className="grid grid-cols-7">
+                            {cells.map((day, i) => {
+                              if (day === null) return <div key={`e${i}`} />;
+                              const isToday = isCurrentMonth && day === todayJalali.jd;
+                              const isSelected = day === bookingJalali.jd;
+                              const isPast = isCurrentMonth && day < todayJalali.jd;
+                              return (
+                                <button
+                                  key={day}
+                                  disabled={isPast}
+                                  onClick={() => {
+                                    const newJ = { jy: bookingJalali.jy, jm: bookingJalali.jm, jd: day };
+                                    setBookingJalali(newJ);
+                                    const g = jalaliToGregorian(newJ.jy, newJ.jm, newJ.jd);
+                                    setBookingDate(`${g.gy}-${String(g.gm).padStart(2, "0")}-${String(g.gd).padStart(2, "0")}`);
+                                    setSelectedSlot("");
+                                  }}
+                                  className={`h-9 text-[12px] font-medium rounded-lg mx-0.5 my-0.5 transition-all ${
+                                    isPast
+                                      ? "text-[#ccc] cursor-not-allowed"
+                                      : isSelected
+                                      ? "bg-[#7c3aed] text-white shadow-sm"
+                                      : isToday
+                                      ? "bg-[#7c3aed]/10 text-[#7c3aed] font-bold"
+                                      : "text-[#333] active:bg-[#f0f0f0]"
+                                  }`}
+                                >
+                                  {day}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Selected date display */}
+                    <div className="mt-2 text-center text-[12px] text-[#666]">
+                      {formatJalaliDateFull(bookingJalali.jy, bookingJalali.jm, bookingJalali.jd)}
+                    </div>
+                  </div>
+
+                  {/* Time slots */}
+                  <div className="mb-4">
+                    <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">ساعات موجود</p>
+                    {bookingSlots.length === 0 ? (
+                      <p className="text-[13px] text-[#999] py-4 text-center">ساعتی موجود نیست</p>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2">
+                        {bookingSlots.map((slot) => (
+                          <button
+                            key={slot.time}
+                            disabled={!slot.available}
+                            onClick={() => setSelectedSlot(slot.time)}
+                            className={`py-2 rounded-xl text-[13px] font-medium transition-all ${
+                              !slot.available
+                                ? "bg-[#f5f5f5] text-[#ccc] cursor-not-allowed"
+                                : selectedSlot === slot.time
+                                ? "bg-[#7c3aed] text-white shadow-sm"
+                                : "bg-[#f0f0f0] text-[#333] active:bg-[#e0e0e0]"
+                            }`}
+                          >
+                            {slot.time}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Booking form */}
+                  {selectedSlot && (
+                    <div className="border-t border-[#f0f0f0] pt-4">
+                      <p className="text-[11px] font-medium text-[#999] mb-2 uppercase tracking-wider">اطلاعات شما</p>
+                      <input
+                        type="text"
+                        placeholder="نام و نام خانوادگی"
+                        value={bookingName}
+                        onChange={(e) => setBookingName(e.target.value)}
+                        className="w-full mb-2 px-3 py-2.5 rounded-xl border border-[#e0e0e0] text-[16px] outline-none focus:border-[#7c3aed] bg-white"
+                      />
+                      <input
+                        type="tel"
+                        placeholder="شماره تلفن"
+                        dir="ltr"
+                        value={bookingPhone}
+                        onChange={(e) => setBookingPhone(e.target.value)}
+                        className="w-full mb-3 px-3 py-2.5 rounded-xl border border-[#e0e0e0] text-[16px] outline-none focus:border-[#7c3aed] bg-white text-left"
+                      />
+
+                      <div className="bg-[#f5f0ff] rounded-xl px-3 py-2 mb-3">
+                        <div className="flex items-center justify-between text-[12px]">
+                          <span className="text-[#666]">تاریخ:</span>
+                          <span className="font-medium text-[#333]">{formatJalaliDateFull(bookingJalali.jy, bookingJalali.jm, bookingJalali.jd)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[12px] mt-1">
+                          <span className="text-[#666]">ساعت:</span>
+                          <span className="font-medium text-[#7c3aed]">{selectedSlot}</span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={submitBooking}
+                        disabled={!bookingName.trim() || !bookingPhone.trim()}
+                        className="w-full bg-[#7c3aed] text-white py-3 rounded-xl text-[14px] font-semibold disabled:opacity-30 btn-press"
+                      >
+                        ثبت نوبت
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/*  SEARCH OVERLAY                                                */}
+      {/* ============================================================ */}
+      {showSearchOverlay && (
+        <div className="fixed inset-0 z-[2000] bg-white animate-slide-up flex flex-col">
+          {/* Search header */}
+          <div className="flex-shrink-0 flex items-center gap-2 px-3 pt-[calc(var(--top-safe)+8px)] pb-2 border-b border-[#f0f0f0]">
+            <button
+              onClick={() => { setShowSearchOverlay(false); setSearchQuery(""); }}
+              className="w-10 h-10 rounded-xl bg-[#f5f5f5] flex items-center justify-center text-[#666] btn-press flex-shrink-0"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                placeholder="جستجوی مغازه، رستوران، کافه..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-[#f5f5f5] rounded-xl px-4 py-2.5 text-[16px] outline-none focus:ring-2 focus:ring-[#fc3f1d]/30 transition-all"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-[#ddd] text-white text-[10px] flex items-center justify-center"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Category chips in overlay */}
+          <div className="flex-shrink-0 flex gap-2 px-3 py-2.5 overflow-x-auto no-scrollbar border-b border-[#f0f0f0]">
+            <button
+              onClick={() => setSelectedCategory("")}
+              className={`flex-shrink-0 h-[30px] px-3.5 rounded-full text-[12px] font-medium transition-all btn-press ${
+                !selectedCategory ? "bg-[#fc3f1d] text-white" : "bg-[#f5f5f5] text-[#666]"
+              }`}
+            >
+              همه
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategory(selectedCategory === cat.name_en ? "" : cat.name_en)}
+                className={`flex-shrink-0 h-[30px] px-3.5 rounded-full text-[12px] font-medium whitespace-nowrap transition-all btn-press flex items-center gap-1 ${
+                  selectedCategory === cat.name_en ? "bg-[#fc3f1d] text-white" : "bg-[#f5f5f5] text-[#666]"
+                }`}
+              >
+                <span>{cat.icon}</span>
+                {cat.name}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort + filter */}
+          <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b border-[#f0f0f0]">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setOpenOnly(!openOnly)}
+                className={`flex items-center gap-1.5 h-[28px] px-3 rounded-full text-[11px] font-medium transition-all btn-press ${
+                  openOnly ? "bg-[#00b341] text-white" : "bg-[#f5f5f5] text-[#666]"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${openOnly ? "bg-white" : "bg-[#00b341]"}`} />
+                فقط باز
+              </button>
+            </div>
+            <div className="flex items-center bg-[#f5f5f5] rounded-full p-0.5 h-[28px]">
+              <button onClick={() => setSortBy("distance")} className={`px-2.5 h-full rounded-full text-[11px] font-medium transition-all ${sortBy === "distance" ? "bg-white text-[#fc3f1d] shadow-sm" : "text-[#999]"}`}>
+                نزدیک‌ترین
+              </button>
+              <button onClick={() => setSortBy("rating")} className={`px-2.5 h-full rounded-full text-[11px] font-medium transition-all ${sortBy === "rating" ? "bg-white text-[#fc3f1d] shadow-sm" : "text-[#999]"}`}>
+                بهترین
+              </button>
+            </div>
+          </div>
+
+          {/* Hint */}
+          {searchQuery.trim().length > 0 && searchQuery.trim().length < 2 && (
+            <div className="px-4 py-2 text-[11px] text-[#999] text-center bg-[#fafafa]">
+              حداقل ۲ حرف تایپ کنید
+            </div>
           )}
+
+          {/* Results */}
+          <div className="flex-1 overflow-y-auto overscroll-contain">
+            {loading ? (
+              <div className="p-3 space-y-3">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex gap-3 p-3 bg-white rounded-xl">
+                    <div className="w-12 h-12 rounded-xl skeleton flex-shrink-0" />
+                    <div className="flex-1 space-y-2 py-1">
+                      <div className="h-3.5 rounded skeleton w-3/4" />
+                      <div className="h-2.5 rounded skeleton w-1/2" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : sortedShops.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="text-[40px] mb-3">🔍</div>
+                <p className="text-[14px] text-[#999]">مغازه‌ای یافت نشد</p>
+              </div>
+            ) : (
+              <div className="p-2">
+                {sortedShops.map((shop) => {
+                  const r = getRatingSummary(shop.id, comments);
+                  return (
+                    <button
+                      key={shop.id}
+                      onClick={() => flyToShop(shop)}
+                      className="w-full flex gap-3 p-3 rounded-xl active:bg-[#f5f5f5] transition-colors text-right"
+                    >
+                      <div className="w-12 h-12 rounded-xl bg-[#f0f0f0] overflow-hidden flex-shrink-0">
+                        <img src={shop.image_url} alt={shop.name} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="text-[14px] font-semibold text-[#1a1a1a] truncate">{shop.name}</span>
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${shop.is_open ? "bg-[#00b341]" : "bg-[#ff4444]"}`} />
+                        </div>
+                        <p className="text-[11px] text-[#999] mb-1">{shop.category_icon} {shop.category_name}</p>
+                        <div className="flex items-center gap-2">
+                          {r.count > 0 && (
+                            <div className="flex items-center gap-0.5">
+                              <span className="text-[10px] text-[#ffb300]">★</span>
+                              <span className="text-[11px] font-medium text-[#f57f17]">{r.avg.toFixed(1)}</span>
+                              <span className="text-[10px] text-[#bbb]">({r.count})</span>
+                            </div>
+                          )}
+                          <span className="text-[11px] text-[#bbb]">📍 {formatDistance(shop.distance)}</span>
+                        </div>
+                      </div>
+                      <a
+                        href={`tel:${shop.phone}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-9 h-9 rounded-xl bg-[#fc3f1d]/10 flex items-center justify-center text-[14px] self-center flex-shrink-0 btn-press"
+                      >
+                        📞
+                      </a>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/*  BOTTOM BAR (when no shop selected)                            */}
+      {/* ============================================================ */}
+      {!selectedShop && !showSearchOverlay && (
+        <div className="absolute bottom-0 left-0 right-0 z-[1000] pb-[var(--bottom-safe)]">
+          <div className="px-3 pb-3">
+            <button
+              onClick={() => setShowSearchOverlay(true)}
+              className="w-full bg-white rounded-2xl shadow-[var(--yandex-shadow-lg)] px-4 h-[52px] flex items-center justify-between btn-press"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#fc3f1d]/10 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-[#fc3f1d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                <span className="text-[14px] font-medium text-[#333]">
+                  {searchQuery || "جستجوی مغازه..."}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="bg-[#f5f5f5] text-[#666] text-[12px] font-semibold px-2.5 py-1 rounded-full">{shops.length}</span>
+                <svg className="w-4 h-4 text-[#999]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </div>
+            </button>
+          </div>
         </div>
       )}
     </div>
